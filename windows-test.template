@@ -1,0 +1,150 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "Template for testing Windows Server configurations",
+  "Parameters" : {
+    "KeyName" : {
+      "Description" : "Name of an existing EC2 KeyPair",
+      "Type" : "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription" : "must be the name of an existing EC2 KeyPair."
+    },
+    "InstanceType" : {
+      "Type" : "String",
+      "Default" : "t2.small"
+    },
+    "AmiId" : {
+      "Type" : "AWS::EC2::Image::Id",
+      "Default" : "ami-4096e23a"
+    },
+    "VpcId": {
+      "Description": "Select the VPC.",
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "Subnet1": {
+      "Description": "Select a subnet.",
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "UserPassword": {
+      "Type" : "String",
+      "NoEcho" : "true"
+    }
+  },
+
+  "Resources" : {
+    "SecurityGroup1" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VpcId" },
+        "GroupDescription" : "Allow access to the instance.",
+        "SecurityGroupIngress" : [
+          { "IpProtocol" : "-1", "CidrIp" : "10.0.0.0/8" }
+        ],
+        "Tags" : [ 
+          { "Key" : "Name", "Value" : "windows-2016-test-sg" }
+        ]
+      }
+    },
+
+    "Instance1": {
+      "Type" : "AWS::EC2::Instance",
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "config" : {
+            "files" : {
+              "c:\\cfn\\cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n"
+                  ]]}
+              },
+              "c:\\cfn\\hooks.d\\cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.Instance1.Metadata.AWS::CloudFormation::Init\n",
+                  "action=cfn-init.exe -v -s ", { "Ref" : "AWS::StackId" },
+                      " -r Instance1",
+                      " --region ", { "Ref" : "AWS::Region" }, "\n"
+                ]]}
+              },
+              "c:\\Temp\\setpwd.ps1" : {
+                "content": { "Fn::Join" : [ "", [
+                  "$password = $args[0]\n",
+                  "$secure = ConvertTo-SecureString -String $password -AsPlainText -Force\n",
+                  "Set-LocalUser -Name \"AdminUser01\" -Password $secure"
+                ]]}
+              }
+            },
+            "services" : {
+              "windows" : {
+                "cfn-hup" : {
+                  "enabled" : "true",
+                  "ensureRunning" : "true",
+                  "files" : ["c:\\cfn\\cfn-hup.conf", "c:\\cfn\\hooks.d\\cfn-auto-reloader.conf"]
+                }
+              }
+            },
+            "commands" : {
+              "1-set-pwd" : {
+                "command" : { "Fn::Join" : [ "", [
+                "powershell.exe -Command c:\\Temp\\setpwd.ps1 \"",
+                { "Ref" : "UserPassword" },"\""
+                ]]}
+              }
+            }
+          }
+        }
+      },
+      
+      "Properties": {
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "ImageId" : { "Ref" : "AmiId" },
+        "NetworkInterfaces": [ {
+          "AssociatePublicIpAddress" : "true",
+          "GroupSet"                 : [{ "Ref" : "SecurityGroup1" }],
+          "DeviceIndex"              : "0",
+          "DeleteOnTermination"      : "true",
+          "SubnetId"                 : { "Ref" : "Subnet1" }
+        } ],
+        "KeyName" : { "Ref" : "KeyName" },
+        "Tags" : [ 
+          { "Key" : "Name", "Value" : "windows-2016-test-instance-1" }
+        ],
+        "UserData" : { "Fn::Base64" : { "Fn::Join" : ["", [
+            "<powershell>\n",
+            
+            "$username = \"AdminUser01\"\n",
+            
+            "New-LocalUser -Name $username -NoPassword\n",
+            "Add-LocalGroupMember -Group \"Administrators\" -Member $username\n",
+            
+            "Set-ExecutionPolicy Unrestricted -force \n",
+
+            "cfn-init.exe -v -s ", { "Ref" : "AWS::StackId" }, 
+            " -r Instance1",
+            " --region ", { "Ref" : "AWS::Region" }, "\n",
+            
+            "cfn-signal.exe -e $lastexitcode ", { "Fn::Base64" : { "Ref" : "WaitHandle1" }}, "\n",
+          
+            "</powershell>"
+        ]]}}
+      }
+    },
+    "WaitHandle1" : {
+      "Type" : "AWS::CloudFormation::WaitConditionHandle"
+    },
+
+    "WaitCondition1" : {
+      "Type" : "AWS::CloudFormation::WaitCondition",
+      "DependsOn" : "Instance1",
+      "Properties" : {
+        "Handle" : {"Ref" : "WaitHandle1"},
+        "Timeout" : "900"
+      }
+    }
+  },
+  
+  "Outputs" : {
+    
+  }  
+}
